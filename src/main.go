@@ -1,5 +1,5 @@
 package main
-
+//a+d Created by Grid06 lit probel
 import (
 	"archive/zip"
 	"bytes"
@@ -26,8 +26,8 @@ import (
 )
 
 const (
-	botToken = "8536931376:AAEuf35FhfFdOKoZsyqnApDRkx7olCX8xHc"
-	adminID  = "6504383276"
+	btToken = 
+	dminID  = 
 	apiURL   = "https://api.telegram.org/bot"
 )
 
